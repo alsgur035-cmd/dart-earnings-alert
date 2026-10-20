@@ -127,7 +127,8 @@ def send_telegram(token: str, chat_id: str, text: str) -> None:
 def main() -> int:
     now = datetime.now(KST)
     parser = argparse.ArgumentParser()
-    parser.add_argument("--start", default=(now - timedelta(days=1)).strftime("%Y-%m-%d"))
+    # 최근 4일: 주말·연휴 사이(금요일 21시 이후 → 월요일 07시) 공시도 놓치지 않게. 이미 보낸 건 seen으로 걸러짐.
+    parser.add_argument("--start", default=(now - timedelta(days=4)).strftime("%Y-%m-%d"))
     parser.add_argument("--end", default=now.strftime("%Y-%m-%d"))
     parser.add_argument("--state", default=str(ROOT / "state" / "seen.json"))
     parser.add_argument("--dry-run", action="store_true", help="텔레그램 대신 화면에 출력, 상태파일은 그대로 저장")
