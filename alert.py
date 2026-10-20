@@ -138,13 +138,14 @@ def main() -> int:
     log = logging.getLogger("alert")
     api_key = os.getenv("DART_API_KEY", "").strip()
     token = os.getenv("TELEGRAM_BOT_TOKEN", "").strip()
-    chat_id = os.getenv("TELEGRAM_CHAT_ID", "").strip()
+    # 받는 사람 여러 명: 쉼표로 구분 (예: 8450555165,1234567890)
+    chat_ids = [c.strip() for c in os.getenv("TELEGRAM_CHAT_ID", "").split(",") if c.strip()]
     quarter = os.getenv("QUARTER", "2026Q3").strip()
     quarter_label = f"{quarter[-1]}Q{quarter[2:4]}"  # 2026Q3 → 3Q26
     if not api_key:
         log.error("DART_API_KEY 없음")
         return 1
-    if not args.dry_run and not (token and chat_id):
+    if not args.dry_run and not (token and chat_ids):
         log.error("TELEGRAM_BOT_TOKEN / TELEGRAM_CHAT_ID 없음")
         return 1
 
@@ -179,7 +180,16 @@ def main() -> int:
         if args.dry_run:
             print("-" * 40 + "\n" + message)
         else:
-            send_telegram(token, chat_id, message)
+            # 한 사람이 실패(봇 차단 등)해도 나머지에게는 보낸다. 전원 실패일 때만 오류 → 다음 실행에서 재시도.
+            failed = []
+            for cid in chat_ids:
+                try:
+                    send_telegram(token, cid, message)
+                except Exception as exc:
+                    failed.append(cid)
+                    log.warning("텔레그램 전송 실패 (받는 사람 %s번째): %s", chat_ids.index(cid) + 1, exc)
+            if len(failed) == len(chat_ids):
+                raise RuntimeError("모든 받는 사람에게 전송 실패")
             time.sleep(1)
 
     sent = 0
