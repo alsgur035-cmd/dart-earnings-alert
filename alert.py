@@ -37,6 +37,7 @@ constants.CACHE_DIR = qd.CACHE_DIR = qf.CACHE_DIR = _CACHE
 
 # 정기보고서는 시즌에 하루 수백 건이라 조건 통과 종목만 알린다. 잠정실적·손익구조변동은 전부 알린다.
 PERIODIC_TYPES = ("분기보고서", "반기보고서")
+RETRY = "재시도 예정: "
 RUN_BUDGET_SEC = int(os.getenv("RUN_BUDGET_SEC", "360"))  # 워크플로 제한(10분) 안에서 끝나도록
 
 
@@ -56,7 +57,9 @@ def save_state(path: Path, state: dict) -> None:
 
 
 def evaluate(api_key: str, disclosure, quarter: str) -> tuple[CalcResult | None, str]:
-    """(판정결과, 건너뛴 사유). 판정 대상이 아니면 결과는 None."""
+    """(판정결과, 건너뛴 사유). 판정 대상이 아니면 결과는 None.
+    사유가 RETRY로 시작하면 일시적 실패 — 기록하지 않고 다음 실행에서 다시 본다.
+    (2026-10-22: LS마린솔루션 원문을 첫 시도에 못 받았는데 '처리됨'으로 찍혀 알림이 영영 누락된 사고)"""
     quality: list = []
     result = CalcResult(disclosure=disclosure)
     if disclosure.report_type in PERIODIC_TYPES:
@@ -64,10 +67,12 @@ def evaluate(api_key: str, disclosure, quarter: str) -> tuple[CalcResult | None,
             api_key, disclosure.corp_code, quarter, disclosure.rcp_no, False, quality,
             disclosure.corp_name, disclosure.link, report_type=disclosure.report_type,
         )
+        if not parsed:  # 보고서는 접수됐는데 DART 재무 API 반영이 늦는 경우
+            return None, RETRY + "정기보고서 재무 데이터 아직 없음"
     else:
         text = qf.fetch_disclosure_text(api_key, disclosure.rcp_no, False, quality)
         if not text:
-            return None, "원문 수집 실패"
+            return None, RETRY + "원문 수집 실패"
         days = qd._extract_report_period_days(text)
         if disclosure.report_type == "잠정실적" and days is not None and days <= 45:
             return None, f"월간 공시(실적기간 {days}일)"
@@ -212,6 +217,9 @@ def main() -> int:
             except Exception as exc:  # 한 건이 실패해도 나머지는 계속, 다음 실행 때 재시도
                 log.warning("판정 실패 %s %s: %s", d.corp_name, d.rcp_no, exc)
                 continue
+            if result is None and skip.startswith(RETRY):
+                log.warning("%s %s (%s)", skip, d.corp_name, d.report_nm)
+                continue  # 기록하지 않음 → 다음 실행에서 다시 시도
             if result is None:
                 log.info("건너뜀 %s (%s): %s", d.corp_name, d.report_nm, skip)
             elif d.report_type in PERIODIC_TYPES:
