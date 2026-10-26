@@ -170,11 +170,6 @@ def main() -> int:
     new = [d for d in targets if d.rcp_no not in seen]
     if os.getenv("INCLUDE_PERIODIC", "1") == "0":  # 정기보고서 알림 끄기 스위치
         new = [d for d in new if d.report_type not in PERIODIC_TYPES]
-    # 2026-10-26: 금융지주사는 본 공시 외에 '(자회사의 주요경영사항)' 공시(자회사 실적을 지주사 이름으로 신고)를 같이 낸다.
-    # 같은 회사·같은 날 본 공시가 있으면 자회사 건은 알림 대상에서 뺀다(없으면 기존대로).
-    _sub = lambda d: "자회사의주요경영사항" in "".join(d.report_nm.split())
-    _parent_days = {(d.stock_code, d.rcept_dt) for d in targets if not _sub(d)}
-    new = [d for d in new if not (_sub(d) and (d.stock_code, d.rcept_dt) in _parent_days)]
     # 잠정실적·손익구조변동을 먼저 처리(속보성), 정기보고서는 뒤로.
     # 같은 회사가 연결·별도를 따로 내면 연결 기준이 먼저 오게(아래에서 회사·날짜당 1회만 알림).
     new.sort(key=lambda d: (d.report_type in PERIODIC_TYPES, "연결" not in d.report_nm, d.rcp_no))
