@@ -121,6 +121,11 @@ def dedupe_disclosures(
 
     by_company: dict[str, Disclosure] = {}
     for key, items in groups.items():
+        # 2026-10-26: 금융지주사는 같은 날 지주사 본 공시 외에 '(자회사의 주요경영사항)' 공시(하나증권·우리은행 등
+        # 자회사 실적을 지주사 이름으로 신고)를 함께 낸다. 본 공시가 있으면 자회사 건은 후보에서 뺀다.
+        parent_only = [it for it in items if "자회사의주요경영사항" not in compact(it.report_nm)]
+        if parent_only:
+            items = parent_only
         # 2026-10-19: 월간 잠정(실적기간 ≤45일: 신세계·이마트·오리온 등의 월 매출 공시)은 분기실적이 아니다.
         # 같은 회사에 분기 길이 공시가 함께 있으면 월간 건은 후보에서 뺀다(접수일이 더 늦어도 월간이 이기지 않게).
         if len(items) > 1 and not offline and api_key:
