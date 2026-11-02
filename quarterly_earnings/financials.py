@@ -57,7 +57,8 @@ def parse_financial_values(text: str) -> dict[str, float | None]:
     if not text:
         return {}
     unit_scale = detect_amount_unit_scale(text)
-    table_values = extract_values_from_tables(text)
+    explicit_missing: set[str] = set()
+    table_values = extract_values_from_tables(text, explicit_missing)
     normalized = normalize_text(text)
     values = {
         "q2_revenue": find_near_metric(normalized, ["당해실적", "당기실적", "당분기"], ["매출액", "영업수익"]),
@@ -81,6 +82,11 @@ def parse_financial_values(text: str) -> dict[str, float | None]:
         values.setdefault(key, value)
         if values[key] is None:
             values[key] = value
+    # 2026-10-28: 잠정실적 표가 칸을 "-"(해당 없음)로 명시했으면 본문 텍스트 보조탐색 값으로 채우지 않는다.
+    # 삼성에피스홀딩스(2025-11 설립)의 전년동기 "-" 칸에 "전년동기" 글자 근처 숫자(=당기값)가 들어가 YoY 0%가 됐었다.
+    for key in explicit_missing:
+        if table_values.get(key) is None:
+            values[key] = None
     return {key: (value * unit_scale if value is not None else None) for key, value in values.items()}
 
 def detect_amount_unit_scale(text: str) -> float:
@@ -112,7 +118,7 @@ def detect_amount_unit_scale(text: str) -> float:
         return 0.00000001
     return 1.0
 
-def extract_values_from_tables(text: str) -> dict[str, float | None]:
+def extract_values_from_tables(text: str, explicit_missing: set[str] | None = None) -> dict[str, float | None]:
     values: dict[str, float | None] = {}
     try:
         tables = pd.read_html(StringIO(text))
@@ -120,7 +126,8 @@ def extract_values_from_tables(text: str) -> dict[str, float | None]:
         return values
 
     for table in tables:
-        values.update({key: value for key, value in extract_provisional_performance_table(table).items() if value is not None})
+        provisional = extract_provisional_performance_table(table, explicit_missing)
+        values.update({key: value for key, value in provisional.items() if value is not None})
         normalized = table.copy()
         normalized.columns = [flatten_column(column) for column in normalized.columns]
         for _, row in normalized.iterrows():
@@ -148,12 +155,21 @@ _EXACT_REVENUE_LABELS = {"매출액", "영업수익", "매출액영업수익"}
 _EXACT_OPERATING_INCOME_LABELS = {"영업이익", "영업이익손실"}
 
 
-def extract_provisional_performance_table(table: pd.DataFrame) -> dict[str, float | None]:
+def extract_provisional_performance_table(table: pd.DataFrame, missing: set[str] | None = None) -> dict[str, float | None]:
     table_text = compact(table.to_string())
     if not (("당기실적" in table_text or "당해실적" in table_text) and "전기실적" in table_text and "전년동기실적" in table_text):
         return {}
 
     values: dict[str, float | None] = {}
+    # 2026-10-28: 칸 위치를 머리글에서 찾는다. 구형 양식(흑자적자전환여부 칸 없음)은 전년동기가 6번째가 아니라
+    # 5번째 칸이라, 고정 위치(6)로 읽으면 증감률 칸을 읽거나 비어서 본문 보조탐색이 당기값을 채웠다.
+    cur_idx, prev_idx, year_idx = 2, 3, 6
+    for _, row in table.iterrows():
+        header = [compact(item) for item in row.tolist()]
+        if "전년동기실적" in header and "전기실적" in header:
+            cur_idx = next((i for i, h in enumerate(header) if h in ("당기실적", "당해실적")), cur_idx)
+            prev_idx, year_idx = header.index("전기실적"), header.index("전년동기실적")
+            break
     for _, row in table.iterrows():
         row_items = list(row.tolist())
         if len(row_items) < 7:
@@ -175,17 +191,25 @@ def extract_provisional_performance_table(table: pd.DataFrame) -> dict[str, floa
         else:
             continue
 
-        current = parse_amount_to_eok(row_items[2])
-        prior_quarter = parse_amount_to_eok(row_items[3])
-        prior_year = parse_amount_to_eok(row_items[6])
+        if max(cur_idx, prev_idx, year_idx) >= len(row_items):
+            continue
+        current = parse_amount_to_eok(row_items[cur_idx])
+        prior_quarter = parse_amount_to_eok(row_items[prev_idx])
+        prior_year = parse_amount_to_eok(row_items[year_idx])
 
+        dash = {name: compact(row_items[idx]) == "-" for name, idx in
+                (("current", cur_idx), ("prior_quarter", prev_idx), ("prior_year", year_idx))}
         if "누계" in line_type:
-            values[f"h1_{suffix}"] = current
-            values[f"y2025_h1_{suffix}"] = prior_year
+            slots = {f"h1_{suffix}": ("current", current), f"y2025_h1_{suffix}": ("prior_year", prior_year)}
         elif "당해실적" in line_type or "당기실적" in line_type:
-            values[f"q2_{suffix}"] = current
-            values[f"q1_{suffix}"] = prior_quarter
-            values[f"y2025_q2_{suffix}"] = prior_year
+            slots = {f"q2_{suffix}": ("current", current), f"q1_{suffix}": ("prior_quarter", prior_quarter),
+                     f"y2025_q2_{suffix}": ("prior_year", prior_year)}
+        else:
+            continue
+        for key, (name, value) in slots.items():
+            values[key] = value
+            if missing is not None and value is None and dash[name]:
+                missing.add(key)   # 공시가 "-"(해당 없음)로 명시한 칸
     return values
 
 def period_key_from_column(column_key: str, metric: str) -> str | None:

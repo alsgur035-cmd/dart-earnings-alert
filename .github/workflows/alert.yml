@@ -57,10 +57,14 @@ jobs:
           if [ "$ONCE" = "1" ]; then
             python alert.py; save_state; exit 0
           fi
+          # 2026-11-02 변경: 21시에 끝내면 다음 날 cron 시동이 10시 전후라 07~10시 공시 알림이 늦었다.
+          # 이제 운영시간 밖에서도 실행을 유지(확인은 안 하고 대기)하고 5시간 30분마다 이어 붙여 07시 정각부터 확인.
           end=$(( $(date +%s) + 330*60 ))
-          while in_hours; do
-            python alert.py || echo "이번 확인 실패 — 5분 뒤 다시 시도"
-            save_state
+          while true; do
+            if in_hours; then
+              python alert.py || echo "이번 확인 실패 — 5분 뒤 다시 시도"
+              save_state
+            fi
             if [ "$(date +%s)" -ge "$end" ]; then
               echo "5시간 30분 경과 — 다음 실행 이어 붙임"
               gh workflow run alert.yml --ref "$GITHUB_REF_NAME"
@@ -68,4 +72,3 @@ jobs:
             fi
             sleep 300
           done
-          echo "운영시간(평일 07~21시) 종료"

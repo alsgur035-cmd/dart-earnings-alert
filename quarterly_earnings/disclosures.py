@@ -165,7 +165,8 @@ def _pick_by_report_period(
             scored.append((days, item))
     if scored:
         # 분기(약 91일)에 가장 가까운 후보를 고른다. 월간형(약 30일 이하)은 거리값이 커서 자동으로 밀려난다.
-        best_days, best_item = min(scored, key=lambda pair: abs(pair[0] - 91))
+        # 2026-10-28: 같은 날 연결·별도 잠정을 함께 내면(HD현대중공업 등) 기간이 같아 동점 → 연결을 우선한다.
+        best_days, best_item = min(scored, key=lambda pair: (abs(pair[0] - 91), not _is_consolidated(pair[1])))
         if quality_rows is not None and len(scored) < len(tied):
             quality_rows.append(dq(
                 tied[0].corp_name, "공시 중복판정", "INFO",
@@ -180,7 +181,11 @@ def _pick_by_report_period(
             f"동일 유형 동점 공시 {len(tied)}건의 실적기간을 판별하지 못해 rcp_no 최대값으로 폴백",
             True, tied[0].link,
         ))
-    return max(tied, key=lambda item: item.rcp_no)
+    return max(tied, key=lambda item: (_is_consolidated(item), item.rcp_no))
+
+
+def _is_consolidated(item: Disclosure) -> bool:
+    return "연결" in compact(item.report_nm)
 
 
 def _fetch_document_text_cached(
@@ -258,7 +263,8 @@ def filter_common_stocks(disclosures: list[Disclosure], excluded_rows: list[dict
 
 def common_stock_exclude_reason(name: str, ticker: str) -> str:
     reasons = []
-    if not re.fullmatch(r"\d{6}", ticker or ""):
+    # 2026-10-28: 2024년부터 신규 상장 종목코드에 영문이 섞인다(삼성에피스홀딩스 0126Z0) — 숫자만 받으면 보통주가 빠진다.
+    if not re.fullmatch(r"[0-9A-Z]{6}", (ticker or "").upper()):
         reasons.append("종목코드 없음")
     for label, pattern in EXCLUDE_NAME_PATTERNS:
         if pattern.search(name or ""):
