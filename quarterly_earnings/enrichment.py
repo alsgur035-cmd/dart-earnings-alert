@@ -43,11 +43,12 @@ def parse_market_value_text(text: str) -> float | None:
     raw = str(text or "").replace(",", "").strip()
     if not raw:
         return None
-    jo = re.search(r"(\d+)\s*조", raw)
-    eok = re.search(r"(\d+)\s*억", raw)
+    # 2026-11-02: 100억 미만은 '74.6억'처럼 소수로 와서 정수만 잡으면 6억이 됐다(유진테크놀로지) → 소수 허용.
+    jo = re.search(r"(\d+(?:\.\d+)?)\s*조", raw)
+    eok = re.search(r"(\d+(?:\.\d+)?)\s*억", raw)
     if not jo and not eok:
         return None
-    return float((int(jo.group(1)) * 10000 if jo else 0) + (int(eok.group(1)) if eok else 0))
+    return round((float(jo.group(1)) * 10000 if jo else 0) + (float(eok.group(1)) if eok else 0), 1)
 
 
 def fetch_naver_mobile(ticker: str, quality_rows: list[dict[str, Any]], ttl: float = 300.0) -> dict[str, Any]:
