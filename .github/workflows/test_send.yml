@@ -1,0 +1,24 @@
+name: 시험 전송 (1건)
+
+# 알림 문구를 바꾼 뒤 실제 폰 화면을 확인하는 용도. 최근 공시 1건을 첫 번째 받는 사람에게만 보낸다.
+# 상태파일(state/seen.json)은 건드리지 않으므로 본 알림에 영향 없음.
+on:
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements.txt
+      - env:
+          DART_API_KEY: ${{ secrets.DART_API_KEY }}
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+          QUARTER: ${{ vars.QUARTER || '2026Q3' }}
+        run: python alert.py --test-send

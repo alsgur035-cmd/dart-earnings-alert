@@ -156,6 +156,7 @@ def main() -> int:
     parser.add_argument("--state", default=str(ROOT / "state" / "seen.json"))
     parser.add_argument("--dry-run", action="store_true", help="텔레그램 대신 화면에 출력, 상태파일은 그대로 저장")
     parser.add_argument("--passed-only", action="store_true", default=os.getenv("PASSED_ONLY") == "1")
+    parser.add_argument("--test-send", action="store_true", help="시험 전송: 최근 공시 1건을 첫 번째 받는 사람에게만 보냄(상태파일 안 건드림)")
     args = parser.parse_args()
 
     logging.basicConfig(level=logging.INFO, format="%(message)s")
@@ -185,6 +186,26 @@ def main() -> int:
         log.error("DART 공시검색 실패: %s", errors)
         return 1
     targets = qd.filter_common_stocks(qd.filter_report_names(raw), [])
+    if args.test_send:
+        # 잠정실적(개별 알림 형식)을 우선, 없으면 정기보고서 한 줄 형식으로 1건만.
+        for d in sorted(targets, key=lambda d: (d.report_type in PERIODIC_TYPES, -int(d.rcp_no))):
+            try:
+                result, _ = evaluate(api_key, d, quarter)
+            except Exception:
+                continue
+            if result is None:
+                continue
+            attach_cap(result)
+            body = build_line(result) if d.report_type in PERIODIC_TYPES else build_message(result, quarter_label)
+            message = "🧪 시험 전송 (실제 알림 형식)\n" + body
+            if args.dry_run:
+                print(message)
+            else:
+                send_telegram(token, chat_ids[0], message)
+            log.info("시험 전송 완료: %s", d.corp_name)
+            return 0
+        log.error("시험 전송할 공시를 찾지 못함")
+        return 1
     new = [d for d in targets if d.rcp_no not in seen]
     if os.getenv("INCLUDE_PERIODIC", "1") == "0":  # 정기보고서 알림 끄기 스위치
         new = [d for d in new if d.report_type not in PERIODIC_TYPES]
