@@ -26,6 +26,7 @@ ROOT = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
 from quarterly_earnings import constants, disclosures as qd, financials as qf  # noqa: E402
+from quarterly_earnings.enrichment import fetch_market_cap  # noqa: E402
 from quarterly_earnings.models import CalcResult  # noqa: E402
 from quarterly_earnings.rules import apply_financial_rules, compute_metrics  # noqa: E402
 
@@ -96,12 +97,29 @@ def fmt_growth(value: float | None, turnaround: bool) -> str:
     return f"{value:+.1f}%"
 
 
+def fmt_cap(eok: float | None) -> str:
+    """시가총액(억원) → '시총 1.2조' / '시총 3,450억'. 조회 실패 시 '시총 -'."""
+    if eok is None:
+        return "시총 -"
+    if round(eok) >= 10000:
+        return f"시총 {eok / 10000:,.1f}조"
+    return f"시총 {eok:,.0f}억"
+
+
+def attach_cap(r: CalcResult) -> None:
+    """알림을 실제로 보낼 종목만 시총 조회(네이버). 실패해도 알림은 나간다."""
+    try:
+        r.market_cap_eok = fetch_market_cap(r.disclosure.stock_code, False, [])
+    except Exception:
+        r.market_cap_eok = None
+
+
 def build_message(r: CalcResult, quarter_label: str) -> str:
     d = r.disclosure
     head = "✅" if r.passed else "⚪"
     kind = {"잠정실적": "잠정", "손익구조변동": "손익구조변동"}.get(d.report_type, d.report_type)
     lines = [
-        f"{head} <b>{escape(d.corp_name)}</b> ({d.stock_code}) · {quarter_label} {kind}{' [정정]' if d.is_correction else ''}",
+        f"{head} <b>{escape(d.corp_name)}</b> ({fmt_cap(r.market_cap_eok)}) · {quarter_label} {kind}{' [정정]' if d.is_correction else ''}",
         f"매출 {fmt_amount(r.q2_revenue)}  QoQ {fmt_growth(r.qoq_revenue_growth, False)} / YoY {fmt_growth(r.yoy_revenue_growth, False)}",
         f"영익 {fmt_amount(r.q2_operating_income)}  QoQ {fmt_growth(r.qoq_op_growth, r.qoq_turnaround)} / YoY {fmt_growth(r.yoy_op_growth, r.yoy_turnaround)}",
         ("통과: " + ", ".join(r.pass_reasons)) if r.passed else "조건 미달",
@@ -114,7 +132,7 @@ def build_line(r: CalcResult) -> str:
     """정기보고서 묶음용 한 줄 요약."""
     d = r.disclosure
     return (
-        f'• <a href="{d.link}">{escape(d.corp_name)}</a> '
+        f'• <a href="{d.link}">{escape(d.corp_name)}</a> ({fmt_cap(r.market_cap_eok)}) '
         f"매출 {fmt_amount(r.q2_revenue)} (Q {fmt_growth(r.qoq_revenue_growth, False)}, Y {fmt_growth(r.yoy_revenue_growth, False)}) / "
         f"영익 {fmt_amount(r.q2_operating_income)} (Q {fmt_growth(r.qoq_op_growth, r.qoq_turnaround)}, Y {fmt_growth(r.yoy_op_growth, r.yoy_turnaround)})"
     )
@@ -224,12 +242,14 @@ def main() -> int:
                 log.info("건너뜀 %s (%s): %s", d.corp_name, d.report_nm, skip)
             elif d.report_type in PERIODIC_TYPES:
                 if result.passed:
+                    attach_cap(result)
                     digest.append((d, build_line(result)))
                     continue  # 묶음 전송 후에 '본 것'으로 기록
                 log.info("정기보고서 조건 미달, 알림 생략: %s", d.corp_name)
             elif args.passed_only and not result.passed:
                 log.info("조건 미달, 알림 생략: %s", d.corp_name)
             else:
+                attach_cap(result)
                 deliver(build_message(result, quarter_label))
                 mark_alerted(d)
                 sent += 1
